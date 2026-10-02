@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Roblox Stats</title>
+
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #111827;
+            color: white;
+            text-align: center;
+        }
+
+        h1 {
+            margin-top: 50px;
+            font-size: 42px;
+        }
+
+        .stats {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin: 50px auto;
+            max-width: 1000px;
+        }
+
+        .card {
+            background: #1f2937;
+            width: 200px;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+        }
+
+        .number {
+            font-size: 35px;
+            font-weight: bold;
+        }
+
+        .name {
+            margin-top: 10px;
+            color: #aaa;
+            font-size: 18px;
+        }
+
+        #status {
+            margin-top: 30px;
+            color: #aaa;
+            font-size: 16px;
+        }
+
+        .refresh {
+            margin-top: 20px;
+            padding: 12px 25px;
+            border: none;
+            border-radius: 10px;
+            background: #2563eb;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        .refresh:hover {
+            background: #1d4ed8;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>🎮 Roblox Stats</h1>
+
+    <div class="stats">
+
+        <div class="card">
+            <div class="number" id="players">--</div>
+            <div class="name">👥 Joueurs</div>
+        </div>
+
+        <div class="card">
+            <div class="number" id="visits">--</div>
+            <div class="name">👁️ Visites</div>
+        </div>
+
+        <div class="card">
+            <div class="number" id="favorites">--</div>
+            <div class="name">❤️ Favoris</div>
+        </div>
+
+        <div class="card">
+            <div class="number" id="likes">--</div>
+            <div class="name">👍 Likes</div>
+        </div>
+
+        <div class="card">
+            <div class="number" id="dislikes">--</div>
+            <div class="name">👎 Dislikes</div>
+        </div>
+
+    </div>
+
+    <button class="refresh" onclick="chargerStats()">
+        🔄 Actualiser
+    </button>
+
+    <div id="status">
+        Chargement...
+    </div>
+
+    <script>
+
+        async function chargerStats() {
+
+            try {
+
+                const response = await fetch("/api/stats");
+
+                if (!response.ok) {
+                    throw new Error("Erreur serveur");
+                }
+
+                const result = await response.json();
+
+                if (result.error) {
+                    throw new Error(result.error);
+                }
+
+                document.getElementById("players").innerText =
+                    result.playing.toLocaleString("fr-FR");
+
+                document.getElementById("visits").innerText =
+                    result.visits.toLocaleString("fr-FR");
+
+                document.getElementById("favorites").innerText =
+                    result.favorites.toLocaleString("fr-FR");
+
+                document.getElementById("likes").innerText =
+                    result.likes.toLocaleString("fr-FR");
+
+                document.getElementById("dislikes").innerText =
+                    result.dislikes.toLocaleString("fr-FR");
+
+                document.getElementById("status").innerText =
+                    "✅ Statistiques mises à jour";
+
+            } catch (error) {
+
+                console.error(error);
+
+                document.getElementById("status").innerText =
+                    "❌ Erreur de chargement : " + error.message;
+            }
+        }
+
+        chargerStats();
+
+        // Actualisation automatique toutes les 30 secondes
+        setInterval(chargerStats, 30000);
+
+    </script>
+
+</body>
+</html>
