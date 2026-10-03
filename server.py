@@ -1,27 +1,52 @@
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import urlopen, Request
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 import json
 import os
+import traceback
 from datetime import datetime, timedelta, timezone
 import time
 
 UNIVERSE_ID = "10768969887"
 ROBLOX_API_KEY = os.environ.get("ROBLOX_API_KEY")
 
-ANALYTICS_URL = (
-    "https://apis.roblox.com/analytics-query-api/v1/"
-    f"universes/{UNIVERSE_ID}/metrics"
-)
+
+def get_json(url, method="GET", body=None, headers=None):
+    request = Request(
+        url,
+        data=body,
+        headers=headers or {},
+        method=method
+    )
+
+    try:
+        with urlopen(request, timeout=30) as response:
+            status = response.status
+            raw = response.read().decode("utf-8")
+            return status, json.loads(raw)
+
+    except HTTPError as e:
+        raw = e.read().decode("utf-8", errors="replace")
+        try:
+            details = json.loads(raw)
+        except:
+            details = {"message": raw}
+
+        raise Exception(
+            f"HTTP {e.code} sur {url} : {json.dumps(details, ensure_ascii=False)}"
+        )
+
+    except URLError as e:
+        raise Exception(f"Erreur réseau : {e}")
 
 
 def recuperer_revenu():
     if not ROBLOX_API_KEY:
-        raise Exception("ROBLOX_API_KEY n'est pas configurée dans Render.")
+        raise Exception(
+            "ROBLOX_API_KEY est absente dans les variables Render."
+        )
 
     maintenant = datetime.now(timezone.utc)
-
-    # On demande les 30 derniers jours
     debut = maintenant - timedelta(days=30)
 
     payload = {
@@ -31,75 +56,81 @@ def recuperer_revenu():
         "endTime": maintenant.strftime("%Y-%m-%dT%H:%M:%SZ")
     }
 
-    request = Request(
-        ANALYTICS_URL,
-        data=json.dumps(payload).encode("utf-8"),
+    url = (
+        "https://apis.roblox.com/analytics-query-api/v1/"
+        f"universes/{UNIVERSE_ID}/metrics"
+    )
+
+    status, data = get_json(
+        url,
+        method="POST",
+        body=json.dumps(payload).encode("utf-8"),
         headers={
             "x-api-key": ROBLOX_API_KEY,
             "Content-Type": "application/json"
-        },
-        method="POST"
+        }
     )
 
-    try:
-        with urlopen(request, timeout=20) as response:
-            status = response.status
-            data = json.loads(response.read().decode("utf-8"))
+    print("Analytics status:", status)
+    print("Analytics response:", json.dumps(data, ensure_ascii=False))
 
-    except HTTPError as e:
-        erreur = e.read().decode("utf-8", errors="replace")
-        raise Exception(f"Roblox API {e.code}: {erreur}")
-
-    # Roblox peut renvoyer 202 pour une requête longue
-    if status == 202 or data.get("done") is False:
-        path = data.get("path")
-
-        if not path:
-            raise Exception("Roblox n'a pas fourni de chemin de résultat.")
-
-        if path.startswith("http"):
-            result_url = path
-        else:
-            result_url = (
-                "https://apis.roblox.com/analytics-query-api/"
-                + path.lstrip("/")
+    # Requête terminée immédiatement
+    if data.get("done") is True:
+        if "error" in data:
+            raise Exception(
+                "Roblox Analytics : " +
+                json.dumps(data["error"], ensure_ascii=False)
             )
 
-        for _ in range(20):
-            poll_request = Request(
-                result_url,
-                headers={
-                    "x-api-key": ROBLOX_API_KEY
-                },
-                method="GET"
-            )
+        return additionner_resultats(data)
 
-            try:
-                with urlopen(poll_request, timeout=20) as response:
-                    result = json.loads(
-                        response.read().decode("utf-8")
-                    )
-            except HTTPError as e:
-                erreur = e.read().decode("utf-8", errors="replace")
+    # Requête longue
+    path = data.get("path")
+
+    if not path:
+        raise Exception(
+            "Roblox n'a pas renvoyé de path pour l'opération."
+        )
+
+    result_url = (
+        "https://apis.roblox.com/analytics-query-api/" +
+        path.lstrip("/")
+    )
+
+    for _ in range(30):
+
+        time.sleep(2)
+
+        status, result = get_json(
+            result_url,
+            method="GET",
+            headers={
+                "x-api-key": ROBLOX_API_KEY
+            }
+        )
+
+        print("Polling analytics:", status)
+        print(json.dumps(result, ensure_ascii=False))
+
+        if result.get("done") is True:
+
+            if "error" in result:
                 raise Exception(
-                    f"Roblox API {e.code}: {erreur}"
+                    "Roblox Analytics : " +
+                    json.dumps(result["error"], ensure_ascii=False)
                 )
 
-            if result.get("done") is True:
-                data = result
-                break
+            return additionner_resultats(result)
 
-            time.sleep(2)
+    raise Exception(
+        "Roblox Analytics n'a pas terminé après 60 secondes."
+    )
 
-        else:
-            raise Exception(
-                "La requête Roblox prend trop de temps."
-            )
 
-    # Récupération des points
-    values = data.get("response", {}).get("values", [])
-
+def additionner_resultats(data):
     total = 0
+
+    values = data.get("response", {}).get("values", [])
 
     for serie in values:
         for point in serie.get("dataPoints", []):
@@ -120,16 +151,13 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == "/api/stats":
 
             try:
-                # Informations générales du jeu
+                # Statistiques générales
                 game_url = (
                     "https://games.roblox.com/v1/games"
                     f"?universeIds={UNIVERSE_ID}"
                 )
 
-                with urlopen(game_url, timeout=10) as response:
-                    game_data = json.loads(
-                        response.read().decode("utf-8")
-                    )
+                _, game_data = get_json(game_url)
 
                 # Likes / dislikes
                 votes_url = (
@@ -137,16 +165,21 @@ class Handler(SimpleHTTPRequestHandler):
                     f"?universeIds={UNIVERSE_ID}"
                 )
 
-                with urlopen(votes_url, timeout=10) as response:
-                    votes_data = json.loads(
-                        response.read().decode("utf-8")
-                    )
+                _, votes_data = get_json(votes_url)
 
                 game = game_data["data"][0]
                 votes = votes_data["data"][0]
 
-                # Revenu des 30 derniers jours
-                revenu_30_jours = recuperer_revenu()
+                # Revenu
+                try:
+                    revenu = recuperer_revenu()
+                    revenu_error = None
+                except Exception as e:
+                    revenu = None
+                    revenu_error = str(e)
+
+                    print("ERREUR REVENUE:")
+                    traceback.print_exc()
 
                 result = {
                     "playing": game["playing"],
@@ -154,13 +187,14 @@ class Handler(SimpleHTTPRequestHandler):
                     "favorites": game["favoritedCount"],
                     "likes": votes["upVotes"],
                     "dislikes": votes["downVotes"],
-                    "revenue30days": revenu_30_jours
+                    "revenue30days": revenu,
+                    "revenueError": revenu_error
                 }
 
                 self.send_response(200)
                 self.send_header(
                     "Content-Type",
-                    "application/json"
+                    "application/json; charset=utf-8"
                 )
                 self.send_header(
                     "Cache-Control",
@@ -174,10 +208,13 @@ class Handler(SimpleHTTPRequestHandler):
 
             except Exception as e:
 
+                print("ERREUR GENERALE:")
+                traceback.print_exc()
+
                 self.send_response(500)
                 self.send_header(
                     "Content-Type",
-                    "application/json"
+                    "application/json; charset=utf-8"
                 )
                 self.end_headers()
 
@@ -199,5 +236,4 @@ server = ThreadingHTTPServer(
 )
 
 print(f"Site lancé sur le port {PORT}")
-
 server.serve_forever()
